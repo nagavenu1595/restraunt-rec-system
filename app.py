@@ -1,8 +1,3 @@
-"""
-Zomato Bangalore Restaurant Recommender  (Business Analytics DA)
-Run:  streamlit run app.py
-Needs zomato.csv in the same folder (or give the path in the sidebar).
-"""
 import os
 import re
 import numpy as np
@@ -25,9 +20,6 @@ USE_COLS = ["name", "online_order", "book_table", "rate", "votes", "location",
             "rest_type", "cuisines", COST_COL]
 
 
-# ----------------------------------------------------------------------------
-# 1. DATA LOADING + CLEANING
-# ----------------------------------------------------------------------------
 @st.cache_resource(show_spinner="Downloading dataset from Kaggle (first run only)...")
 def get_dataset_path():
     folder = kagglehub.dataset_download("himanshupoddar/zomato-bangalore-restaurants")
@@ -40,19 +32,16 @@ def get_dataset_path():
 
 @st.cache_data(show_spinner="Loading and cleaning data...")
 def load_data(path):
-    # Read only the header first and check every column we need actually exists
     header = pd.read_csv(path, nrows=0).columns.tolist()
     missing_cols = [c for c in USE_COLS if c not in header]
     if missing_cols:
         raise KeyError(f"Missing columns {missing_cols}. Columns found in file: {header}")
-    # usecols skips the huge reviews_list / menu_item columns -> fast, low memory
     raw = pd.read_csv(path, usecols=USE_COLS)
     log = {"raw_rows": len(raw)}
 
     df = raw.drop_duplicates().copy()
     log["after_dedup"] = len(df)
 
-    # rate: "4.1/5", "3.8 /5", "NEW", "-", "0"  ->  float or NaN
     df["rate"] = pd.to_numeric(
         df["rate"].astype(str).str.extract(r"(\d+\.?\d*)\s*/\s*5")[0], errors="coerce")
     df["cost"] = pd.to_numeric(
@@ -62,8 +51,6 @@ def load_data(path):
     df = df.dropna(subset=["rate", "cost", "votes", "location", "rest_type", "cuisines"])
     log["after_missing"] = len(df)
 
-    # The same restaurant appears once per listing category -> keep one row per
-    # (name, location) so tests do not count a restaurant several times.
     df = df.drop_duplicates(subset=["name", "location"]).copy()
     log["final_rows"] = len(df)
 
@@ -73,7 +60,6 @@ def load_data(path):
     df["online_bin"] = (df["online_order"] == "Yes").astype(int)
     df["book_bin"] = (df["book_table"] == "Yes").astype(int)
 
-    # Bayesian (IMDB-style) weighted rating to handle "4.5 from 20 votes"
     C = df["rate"].mean()
     m = df["votes"].quantile(0.60)
     df["adj_rate"] = (df["votes"] / (df["votes"] + m)) * df["rate"] + \
@@ -87,9 +73,6 @@ def minmax(s):
     return (s - s.min()) / rng if rng > 0 else pd.Series(0.5, index=s.index)
 
 
-# ----------------------------------------------------------------------------
-# SIDEBAR
-# ----------------------------------------------------------------------------
 st.sidebar.title("🍽️ Zomato Recommender")
 try:
     path = get_dataset_path()
@@ -107,9 +90,6 @@ st.caption("Statistically adjusted ratings + hypothesis tests + segmentation, bu
 tab_rec, tab_eda, tab_stats, tab_seg, tab_about = st.tabs(
     ["🎯 Recommender", "📊 EDA", "🧪 Statistical Tests", "🧩 Segments (K-means)", "📝 Method & Cleaning"])
 
-# ----------------------------------------------------------------------------
-# TAB 1: RECOMMENDER
-# ----------------------------------------------------------------------------
 with tab_rec:
     st.subheader("Tell us what you want")
     c1, c2, c3 = st.columns(3)
@@ -181,9 +161,6 @@ with tab_rec:
                        f"m = {log['m']:.0f} (60th percentile of votes), C = {log['C']:.2f} (mean rating). "
                        "Restaurants with few votes are pulled towards the overall mean.")
 
-# ----------------------------------------------------------------------------
-# TAB 2: EDA
-# ----------------------------------------------------------------------------
 with tab_eda:
     st.subheader("Descriptive statistics")
     desc = df[["rate", "votes", "cost", "adj_rate"]].describe().T
@@ -211,14 +188,10 @@ with tab_eda:
     st.plotly_chart(px.imshow(corr.round(2), text_auto=True, color_continuous_scale="RdBu_r",
                               zmin=-1, zmax=1), use_container_width=True)
 
-# ----------------------------------------------------------------------------
-# TAB 3: STATISTICAL TESTS
-# ----------------------------------------------------------------------------
 with tab_stats:
     alpha = 0.05
     st.caption(f"All tests at α = {alpha}")
 
-    # --- Test 1: t-test
     st.markdown("### 1. Does online ordering relate to rating? (Independent t-test)")
     st.write("**H0:** mean rating is the same with and without online ordering. **H1:** it differs.")
     g1 = df.loc[df["online_order"] == "Yes", "rate"]
@@ -238,7 +211,6 @@ with tab_stats:
             f"ratings {'differ significantly' if p < alpha else 'do not differ significantly'} by online ordering "
             f"(effect size d = {d_cohen:.2f}). Shapiro p < 0.05 means ratings are not perfectly normal, so Mann-Whitney is a robustness check.")
 
-    # --- Test 2: ANOVA
     st.markdown("### 2. Does rating differ across restaurant types? (One-way ANOVA + Kruskal-Wallis + Tukey)")
     st.write("**H0:** all restaurant types have the same mean rating. **H1:** at least one differs.")
     vc = df["main_type"].value_counts()
@@ -266,7 +238,6 @@ with tab_stats:
     st.write("Tukey HSD post-hoc (5 most common types):")
     st.dataframe(tk_df, hide_index=True, use_container_width=True)
 
-    # --- Test 3: Chi-square
     st.markdown("### 3. Is table booking associated with high ratings? (Chi-square test of independence)")
     st.write("**H0:** table booking and rating category are independent. **H1:** they are associated. "
              "High rating = 4.0 or above.")
@@ -280,7 +251,6 @@ with tab_stats:
             f"table booking is {'associated' if pc < alpha else 'not associated'} with high rating "
             f"(effect size V = {cramers:.2f}).")
 
-    # --- Regression
     st.markdown("### 4. What drives rating? (Multiple linear regression)")
     model = smf.ols("rate ~ log_votes + cost + online_bin + book_bin", data=df).fit()
     ci = model.conf_int()
@@ -296,9 +266,6 @@ with tab_stats:
                        labels={"x": "Fitted rating", "y": "Residual"}, title="Residuals vs fitted")
     st.plotly_chart(resid, use_container_width=True)
 
-# ----------------------------------------------------------------------------
-# TAB 4: K-MEANS SEGMENTS
-# ----------------------------------------------------------------------------
 with tab_seg:
     st.subheader("Restaurant segments (K-means on rating, log votes and cost)")
     feats = ["rate", "log_votes", "cost"]
@@ -332,9 +299,6 @@ with tab_seg:
     st.caption("Name the clusters from the profile table in your report, e.g. 'budget quick bites', "
                "'popular mid-range', 'premium dining'.")
 
-# ----------------------------------------------------------------------------
-# TAB 5: METHOD
-# ----------------------------------------------------------------------------
 with tab_about:
     st.subheader("Data cleaning log")
     st.dataframe(pd.DataFrame({
